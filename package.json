@@ -1,0 +1,22 @@
+{
+  "name": "aw-insights",
+  "version": "1.0.0",
+  "description": "A local, category-aware ActivityWatch dashboard: top apps, top websites, work vs. learning vs. entertainment — with per-browser domain composition.",
+  "keywords": ["activitywatch", "productivity", "dashboard", "time-tracking", "analytics"],
+  "homepage": "https://github.com/YOUR_USERNAME/aw-insights#readme",
+  "bugs": {
+    "url": "https://github.com/YOUR_USERNAME/aw-insights/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR_USERNAME/aw-insights.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/analytics.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

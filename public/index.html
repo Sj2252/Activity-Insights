@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Activity Insights</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f131d'/%3E%3Cpath d='M6 16h4l3-8 5 16 3-8h5' fill='none' stroke='%237c3aed' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="progress" class="progress" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 12h4l3-8 4 16 3-8h4"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <h1>Activity Insights</h1>
+      <div id="connState" class="conn" title="ActivityWatch API connection status">
+        <span class="conn-dot" aria-hidden="true"></span>
+        <span id="connText">Connecting…</span>
+      </div>
+    </div>
+  </div>
+
+  <nav class="range-tabs" id="rangeTabs" aria-label="Date range selector">
+    <button type="button" data-preset="today" class="active" aria-pressed="true">Today</button>
+    <button type="button" data-preset="yesterday" aria-pressed="false">Yesterday</button>
+    <button type="button" data-preset="7d" aria-pressed="false">7 days</button>
+    <button type="button" data-preset="30d" aria-pressed="false">30 days</button>
+  </nav>
+
+  <div class="top-actions">
+    <button type="button" id="refreshBtn" class="btn btn-ghost" title="Refresh activity data">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+        <path d="M3 3v5h5"/>
+        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+        <path d="M16 21h5v-5"/>
+      </svg>
+      <span>Refresh</span>
+    </button>
+    <button type="button" id="rulesBtn" class="btn btn-ghost" title="Edit category rules and overrides">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 21v-7"/>
+        <path d="M4 10V3"/>
+        <path d="M12 21v-9"/>
+        <path d="M12 8V3"/>
+        <path d="M20 21v-5"/>
+        <path d="M20 12V3"/>
+        <path d="M1 14h6"/>
+        <path d="M9 8h6"/>
+        <path d="M17 16h6"/>
+      </svg>
+      <span>Categories</span>
+    </button>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden role="alert">
+  <div class="banner-body">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="banner-icon" aria-hidden="true">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="8" x2="12" y2="12"/>
+      <line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+    <div>
+      <strong>Could not reach ActivityWatch</strong>
+      <span id="bannerDetail"></span>
+    </div>
+  </div>
+  <button type="button" id="retryBtn" class="btn btn-small btn-banner">Retry</button>
+</div>
+
+<main id="main">
+  <div id="loader" class="loader" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <p>Loading activity data…</p>
+  </div>
+
+  <section class="range-info" aria-live="polite">
+    <h2 id="rangeTitle">Today</h2>
+    <p id="rangeSub">Reading ActivityWatch…</p>
+  </section>
+
+  <section id="stats" class="stats" aria-label="Summary statistics"></section>
+
+  <section class="grid-2">
+    <article class="card" id="categoryCard">
+      <div class="card-head">
+        <div>
+          <h3>Time by category</h3>
+          <p id="categorySub">Content attention distribution</p>
+        </div>
+      </div>
+      <div class="donut-wrap">
+        <div class="donut">
+          <svg id="donutSvg" viewBox="0 0 160 160" role="img" aria-label="Time by category chart"></svg>
+          <div class="donut-center">
+            <strong id="donutTotal">—</strong>
+            <span>Active</span>
+          </div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </div>
+    </article>
+
+    <article class="card" id="rhythmCard">
+      <div class="card-head">
+        <div>
+          <h3 id="rhythmTitle">When you're active</h3>
+          <p id="rhythmSub">Active minutes by hour</p>
+        </div>
+        <span class="chip" id="rhythmBadge">—</span>
+      </div>
+      <div id="rhythmBody" class="rhythm-body"></div>
+    </article>
+  </section>
+
+  <section class="grid-2 equal">
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h3>Top applications</h3>
+        </div>
+        <div class="card-tools">
+          <button type="button" class="btn btn-small btn-ghost" id="appsCsvBtn" title="Export applications as CSV">CSV</button>
+        </div>
+      </div>
+      <div id="appList" class="item-list"></div>
+      <button type="button" class="btn btn-small btn-ghost show-all-btn" id="appsAllBtn" hidden>Show all</button>
+    </article>
+
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h3>Top websites</h3>
+          <p>Domain attention from ActivityWatch web watcher</p>
+        </div>
+        <div class="card-tools">
+          <button type="button" class="btn btn-small btn-ghost" id="sitesCsvBtn" title="Export websites as CSV">CSV</button>
+        </div>
+      </div>
+      <div id="siteList" class="item-list"></div>
+      <button type="button" class="btn btn-small btn-ghost show-all-btn" id="sitesAllBtn" hidden>Show all</button>
+      <p class="card-note" id="sitesNote"></p>
+    </article>
+  </section>
+
+  <footer class="footer">
+    <div class="footer-note">
+      Active time = window time intersecting ActivityWatch <strong>not-afk</strong> intervals. Local-only privacy.
+    </div>
+    <div class="footer-meta">
+      <span id="updatedAt">—</span> ·
+      <a href="http://localhost:5600" target="_blank" rel="noreferrer">Open ActivityWatch</a>
+    </div>
+  </footer>
+</main>
+
+<div id="tooltip" class="tooltip" hidden></div>
+
+<div id="catPop" class="popover" hidden role="dialog" aria-label="Change category">
+  <div class="pop-title"><span id="popName"></span></div>
+  <div id="popOptions"></div>
+  <div class="pop-sep"></div>
+  <button type="button" class="pop-auto" id="popAuto">Automatic (use rules)</button>
+</div>
+
+<div id="rulesModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="rulesTitle">
+  <div class="modal-card">
+    <header>
+      <div class="modal-header-top">
+        <h3 id="rulesTitle">Categories &amp; rules</h3>
+        <button type="button" class="modal-close-btn" id="cancelRulesBtn" aria-label="Close dialog">✕</button>
+      </div>
+      <p>
+        One category per line, in priority order (first match wins). Patterns are case-insensitive and match against app names, window titles, and domains. Use <code>^</code> prefix to match app name only (e.g. <code>^brave.exe</code>).
+      </p>
+    </header>
+
+    <div class="modal-cats" id="modalCats"></div>
+
+    <textarea id="rulesText" spellcheck="false" aria-label="Category rules editor"></textarea>
+    <div id="rulesErrors" class="rules-errors" hidden></div>
+    <p class="modal-hint">
+      Example: placing <code>Learning: youtube, youtu.be</code> above the Entertainment rule reclassifies YouTube as Learning.
+    </p>
+
+    <div class="modal-footer">
+      <button type="button" class="btn btn-ghost" id="resetRulesBtn">Restore defaults</button>
+      <button type="button" class="btn btn-ghost" id="clearOverridesBtn">Clear overrides</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn-primary" id="saveRulesBtn">Save rules</button>
+    </div>
+  </div>
+</div>
+
+<noscript>
+  <div style="padding:24px;color:#f8fafc;background:#0b0d14;min-height:100vh">This dashboard requires JavaScript.</div>
+</noscript>
+
+<script src="analytics.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
