@@ -2,9 +2,8 @@
 
 (function () {
   const A = window.AWAnalytics;
-  const CATEGORIES = A.CATEGORIES;
-  const CATEGORY_BY_ID = A.CATEGORY_BY_ID;
 
+  const STORAGE_CATEGORIES = 'aw-insights.categories.v1';
   const STORAGE_RULES = 'aw-insights.rules.v1';
   const STORAGE_OVERRIDES = 'aw-insights.overrides.v1';
   const PRESET_LABELS = {
@@ -111,9 +110,11 @@
     buckets: null,
     raw: null,
     usage: null,
+    categories: loadCategories(),
+    categoryById: new Map(),
     rulesText: loadText(STORAGE_RULES) || A.DEFAULT_RULES_TEXT,
     rules: [],
-    overrides: loadOverrides(),
+    overrides: { apps: {}, sites: {} },
     showAllApps: false,
     showAllSites: false,
     loading: false,
@@ -123,9 +124,11 @@
     popover: null,
     popoverAnchor: null
   };
+  state.categoryById = new Map(state.categories.map(function (c) { return [c.id, c]; }));
+  state.overrides = loadOverrides();
 
-  const parsedInitial = A.parseRules(state.rulesText);
-  state.rules = parsedInitial.errors.length ? A.parseRules(A.DEFAULT_RULES_TEXT).rules : parsedInitial.rules;
+  const parsedInitial = A.parseRules(state.rulesText, state.categories);
+  state.rules = parsedInitial.errors.length ? A.parseRules(A.DEFAULT_RULES_TEXT, state.categories).rules : parsedInitial.rules;
   if (parsedInitial.errors.length || !state.rules.length) {
     state.rulesText = A.DEFAULT_RULES_TEXT;
   }
@@ -162,15 +165,34 @@
     try { localStorage.setItem(key, value); } catch (err) { /* ignore */ }
   }
 
+  function loadCategories() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(STORAGE_CATEGORIES) || 'null');
+      if (Array.isArray(raw) && raw.length) {
+        const valid = raw.filter(function (c) {
+          return c && typeof c.id === 'string' && typeof c.label === 'string' && typeof c.color === 'string';
+        });
+        if (valid.length) return valid;
+      }
+    } catch (err) { /* ignore */ }
+    return A.DEFAULT_CATEGORIES.map(function (c) { return Object.assign({}, c); });
+  }
+
+  function saveCategories() {
+    saveText(STORAGE_CATEGORIES, JSON.stringify(state.categories));
+    state.categoryById = new Map(state.categories.map(function (c) { return [c.id, c]; }));
+  }
+
   function loadOverrides() {
     try {
-      return A.sanitizeOverrides(JSON.parse(localStorage.getItem(STORAGE_OVERRIDES) || '{}'));
+      return A.sanitizeOverrides(JSON.parse(localStorage.getItem(STORAGE_OVERRIDES) || '{}'), state.categories);
     } catch (err) {
       return { apps: {}, sites: {} };
     }
   }
 
   function saveOverrides() {
+    state.overrides = A.sanitizeOverrides(state.overrides, state.categories);
     saveText(STORAGE_OVERRIDES, JSON.stringify(state.overrides));
   }
 
@@ -230,7 +252,7 @@
   }
 
   function category(id) {
-    return CATEGORY_BY_ID.get(id) || CATEGORY_BY_ID.get('other');
+    return state.categoryById.get(id) || state.categoryById.get('other') || state.categories[0] || { id: 'other', label: 'Other', color: '#475569' };
   }
 
   function categoryLabel(id) {
@@ -470,7 +492,7 @@
         state.rangeEnd = state.lastGood.rangeEnd;
         setActivePreset(state.preset);
       } else {
-        state.usage = A.computeUsage({ rangeStart: range.start, rangeEnd: range.end });
+        state.usage = A.computeUsage({ rangeStart: range.start, rangeEnd: range.end, categories: state.categories });
         render();
       }
     } finally {
@@ -491,6 +513,7 @@
       afkEvents: state.raw.afkEvents,
       rangeStart: state.raw.rangeStart,
       rangeEnd: state.raw.rangeEnd,
+      categories: state.categories,
       rules: state.rules,
       overrides: state.overrides
     });
@@ -631,247 +654,6 @@
    * App / site lists
    * ------------------------------------------------------------------ */
 
-  function renderTimeline(usage) {
-    state.timeline = null;
-    const days = usage.days || [];
-
-    if (days.length <= 1) {
-      renderDayTimeline(usage, days[0]);
-      return;
-    }
-
-    els.timelineTitle.textContent = 'Daily activity';
-    els.timelineSub.textContent = 'Active time per day, split by category';
-    els.timelineBadge.textContent = fmtDuration(usage.totalActive / days.length) + ' / day avg';
-    els.timelineFooter.innerHTML = '<span>Hover a bar for the day\'s breakdown</span><span>' +
-      days.length + ' days</span>';
-
-    const maxTotal = Math.max.apply(null, days.map(function (d) { return d.total; }).concat([1]));
-    const labelEvery = Math.max(1, Math.ceil(days.length / 8));
-
-    const cols = days.map(function (day, index) {
-      const cats = activeCategoryList({
-        categories: CATEGORIES.map(function (c) {
-          return Object.assign({}, c, { seconds: day.cats[c.id] || 0 });
-        })
-      }).sort(function (a, b) {
-        return CATEGORIES.findIndex(function (c) { return c.id === a.id; }) -
-          CATEGORIES.findIndex(function (c) { return c.id === b.id; });
-      });
-
-      const height = day.total > 0
-        ? Math.max(3, (day.total / maxTotal) * 180)
-        : 2;
-
-      const segments = cats.map(function (cat) {
-        return '<span style="height:' + ((cat.seconds / day.total) * 100).toFixed(3) +
-          '%;background:' + cat.color + '"></span>';
-      }).join('');
-
-      const breakdown = cats.map(function (cat) {
-        return '<div class="tip-sub"><span style="color:' + cat.color + '">■</span> ' +
-          esc(cat.label) + ' · ' + fmtDuration(cat.seconds) + '</div>';
-      }).join('');
-
-      const tip = '<div class="tip-title">' + esc(fullDate(day.start)) + '</div>' +
-        '<div class="tip-sub">' + fmtDuration(day.total) + ' active</div>' + breakdown;
-
-      const showLabel = days.length <= 10 || index % labelEvery === 0 || index === days.length - 1;
-
-      return '<div class="day-col" data-tip="' + esc(tip) + '">' +
-        '<div class="day-bar" style="height:' + height.toFixed(1) + 'px">' + segments + '</div>' +
-        '<div class="day-label">' + (showLabel ? esc(shortWeekday(day.start) + ' ' + new Date(day.start).getDate()) : '') + '</div>' +
-        '</div>';
-    }).join('');
-
-    els.timelineArea.innerHTML = '<div class="timeline-bars" style="height:210px">' + cols + '</div>';
-  }
-
-  function renderDayTimeline(usage, day) {
-    if (!day) {
-      els.timelineTitle.textContent = 'Activity timeline';
-      els.timelineSub.textContent = 'No day data';
-      els.timelineBadge.textContent = '—';
-      els.timelineArea.innerHTML = '<div class="empty">No activity in this range.</div>';
-      els.timelineFooter.innerHTML = '';
-      return;
-    }
-
-    const dayStart = day.start;
-    const dayEnd = new Date(new Date(dayStart).getFullYear(), new Date(dayStart).getMonth(), new Date(dayStart).getDate() + 1).getTime();
-    const segments = usage.segments.filter(function (seg) {
-      return seg.end > dayStart && seg.start < dayEnd;
-    });
-
-    els.timelineTitle.textContent = 'Activity timeline';
-    els.timelineSub.textContent = 'Every active block, colored by category';
-    els.timelineBadge.textContent = fmtDuration(day.total) + ' active';
-    els.timelineArea.innerHTML = '<canvas id="timelineCanvas" class="timeline-canvas" aria-label="Activity timeline"></canvas>';
-    els.timelineFooter.innerHTML = '<span>Hover a block to see the app and website</span>' +
-      '<span>Blank space = away from keyboard</span>' +
-      (state.lastUpdated ? '<span>Updated ' + esc(fmtClock(state.lastUpdated.getTime())) + '</span>' : '');
-
-    const canvas = $('timelineCanvas');
-    if (!canvas) return;
-    state.timeline = {
-      canvas: canvas,
-      segments: segments,
-      dayStart: dayStart,
-      dayEnd: dayEnd
-    };
-
-    drawDayTimeline();
-
-    canvas.addEventListener('mousemove', function (event) {
-      const rect = canvas.getBoundingClientRect();
-      const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-      const t = dayStart + ratio * (dayEnd - dayStart);
-      const seg = findSegmentAt(segments, t);
-      if (!seg) {
-        hideTooltip();
-        return;
-      }
-      const cat = category(seg.category);
-      const title = seg.domain || prettyApp(seg.app);
-      const subtitle = (seg.title ? esc(seg.title) : 'No window title') +
-        ' · ' + fmtClock(seg.start) + '–' + fmtClock(seg.end) +
-        ' · ' + fmtDuration((seg.end - seg.start) / 1000);
-      showTooltip(
-        '<div class="tip-title">' + esc(title) + '</div>' +
-        '<div class="tip-sub">' + subtitle + '</div>' +
-        '<div class="tip-cat" style="--c:' + cat.color + '">' + esc(cat.label) + '</div>',
-        event.clientX,
-        event.clientY
-      );
-    });
-
-    canvas.addEventListener('mouseleave', hideTooltip);
-  }
-
-  function drawDayTimeline() {
-    const data = state.timeline;
-    if (!data) return;
-    const canvas = data.canvas;
-    if (!canvas.isConnected) return;
-
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    if (!width || !height) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-
-    const laneTop = 30;
-    const laneHeight = 44;
-    const dayMs = data.dayEnd - data.dayStart;
-
-    ctx.fillStyle = 'rgba(255,255,255,0.035)';
-    fillRoundRect(ctx, 0, laneTop, width, laneHeight, 8);
-
-    for (const seg of data.segments) {
-      const x1 = ((seg.start - data.dayStart) / dayMs) * width;
-      const x2 = ((seg.end - data.dayStart) / dayMs) * width;
-      const segmentWidth = Math.max(1, x2 - x1 - 0.35);
-      if (x2 <= 0 || x1 >= width) continue;
-      ctx.fillStyle = categoryColor(seg.category);
-      const x = clamp(x1, 0, width);
-      const w = Math.min(segmentWidth, width - x);
-      if (w <= 0) continue;
-      if (w > 4) {
-        fillRoundRect(ctx, x, laneTop, w, laneHeight, 2);
-      } else {
-        ctx.fillRect(x, laneTop, w, laneHeight);
-      }
-    }
-
-    /* hour grid and labels */
-    ctx.strokeStyle = 'rgba(255,255,255,0.055)';
-    ctx.fillStyle = 'rgba(155,166,190,0.75)';
-    ctx.font = '10px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
-    ctx.textBaseline = 'top';
-
-    for (let hour = 0; hour <= 24; hour += 3) {
-      const x = (hour / 24) * width;
-      const isEdge = hour === 0 || hour === 24;
-      if (!isEdge) {
-        ctx.beginPath();
-        ctx.moveTo(x, laneTop - 5);
-        ctx.lineTo(x, laneTop + laneHeight + 5);
-        ctx.stroke();
-      }
-      const label = String(hour).padStart(2, '0') + ':00';
-      if (hour === 24) {
-        ctx.textAlign = 'right';
-        ctx.fillText(label, x - 2, laneTop + laneHeight + 16);
-      } else {
-        ctx.textAlign = 'left';
-        ctx.fillText(label, isEdge ? 1 : x + 3, laneTop + laneHeight + 16);
-      }
-    }
-
-    /* now marker */
-    const now = Date.now();
-    if (now >= data.dayStart && now < data.dayEnd) {
-      const x = ((now - data.dayStart) / dayMs) * width;
-      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-      ctx.setLineDash([3, 4]);
-      ctx.beginPath();
-      ctx.moveTo(x, laneTop - 10);
-      ctx.lineTo(x, laneTop + laneHeight + 10);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(233,237,247,0.8)';
-      ctx.textAlign = x > width - 30 ? 'right' : 'left';
-      ctx.fillText('now', x > width - 30 ? x - 4 : x + 4, laneTop - 22);
-    }
-
-    if (!data.segments.length) {
-      ctx.fillStyle = 'rgba(140,150,173,0.7)';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('No activity recorded in this period', width / 2, laneTop + laneHeight / 2);
-    }
-  }
-
-  function fillRoundRect(ctx, x, y, width, height, radius) {
-    if (width <= 0 || height <= 0) return;
-    if (ctx.roundRect) {
-      ctx.beginPath();
-      ctx.roundRect(x, y, width, height, Math.min(radius, width / 2, height / 2));
-      ctx.fill();
-    } else {
-      ctx.fillRect(x, y, width, height);
-    }
-  }
-
-  function findSegmentAt(segments, t) {
-    let lo = 0;
-    let hi = segments.length - 1;
-    let index = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (segments[mid].start <= t) {
-        index = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    for (let i = Math.max(0, index - 2); i <= Math.min(segments.length - 1, index + 2); i++) {
-      if (t >= segments[i].start && t < segments[i].end) return segments[i];
-    }
-    return null;
-  }
-
-  /* ------------------------------------------------------------------ *
-   * App / site lists
-   * ------------------------------------------------------------------ */
-
   function overrideFor(scope, key) {
     if (scope === 'app') return state.overrides.apps[key] || null;
     return state.overrides.sites[key] || null;
@@ -978,6 +760,7 @@
       return;
     }
 
+    els.sitesNote.textContent = '';
     const maxSeconds = sites[0].seconds || 1;
     const visible = state.showAllSites ? sites : sites.slice(0, TOP_COUNT);
 
@@ -1049,14 +832,14 @@
 
     const cols = hours.map(function (slot, hour) {
       const height = slot.total > 0 ? Math.max(4, (slot.total / maxSeconds) * 100) : 1.5;
-      const cats = CATEGORIES
+      const cats = state.categories
         .filter(function (c) { return (slot.cats[c.id] || 0) >= 0.5; })
         .map(function (c) {
           const share = (slot.cats[c.id] / slot.total) * 100;
           return '<span style="height:' + share.toFixed(3) + '%;background:' + c.color + '"></span>';
         }).join('');
 
-      const breakdown = CATEGORIES
+      const breakdown = state.categories
         .filter(function (c) { return (slot.cats[c.id] || 0) >= 0.5; })
         .sort(function (a, b) { return (slot.cats[b.id] || 0) - (slot.cats[a.id] || 0); })
         .map(function (c) {
@@ -1080,7 +863,7 @@
     els.rhythmBody.innerHTML = '<div class="hourly">' + cols + '</div>' +
       '<div class="hour-labels">' + labels + '</div>' +
       '<div class="heat-legend">' +
-      CATEGORIES.filter(function (c) {
+      state.categories.filter(function (c) {
         return usage.categories.some(function (u) { return u.id === c.id && u.seconds >= 1; });
       }).map(function (c) {
         return '<span class="chip" style="--c:' + c.color + '"><span class="legend-dot" style="background:' + c.color + '"></span>' + esc(c.label) + '</span>';
@@ -1120,7 +903,7 @@
           style = 'background:' + hexToRgba(dominant.color, alpha.toFixed(3));
         }
 
-        const breakdown = CATEGORIES
+        const breakdown = state.categories
           .filter(function (c) { return (slot.cats[c.id] || 0) >= 0.5; })
           .sort(function (a, b) { return (slot.cats[b.id] || 0) - (slot.cats[a.id] || 0); })
           .slice(0, 4)
@@ -1139,7 +922,7 @@
 
     html += '</div></div>';
 
-    const used = CATEGORIES.filter(function (c) {
+    const used = state.categories.filter(function (c) {
       return usage.categories.some(function (u) { return u.id === c.id && u.seconds >= 1; });
     });
 
@@ -1183,7 +966,7 @@
    * ------------------------------------------------------------------ */
 
   function buildPopoverOptions(current) {
-    els.popOptions.innerHTML = CATEGORIES.map(function (cat) {
+    els.popOptions.innerHTML = state.categories.map(function (cat) {
       return '<button type="button" class="pop-option' + (cat.id === current ? ' current' : '') + '"' +
         ' data-cat="' + cat.id + '">' +
         '<span class="dot" style="background:' + cat.color + '"></span>' +
@@ -1235,17 +1018,118 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Rules modal
+   * Rules modal & category manager
    * ------------------------------------------------------------------ */
 
   function renderModalCategories() {
-    els.modalCats.innerHTML = CATEGORIES.map(function (cat) {
-      return '<span class="modal-cat"><span class="dot" style="background:' + cat.color + '"></span>' +
-        esc(cat.label) + '</span>';
+    els.modalCats.innerHTML = state.categories.map(function (cat) {
+      const isOther = cat.id === 'other';
+      const badge = cat.productive ? '<span class="modal-cat-badge" title="Counts toward focus time">Focus</span>' : '';
+      const removeBtn = !isOther && state.categories.length > 1
+        ? '<button type="button" class="modal-cat-remove" data-cat-id="' + esc(cat.id) + '" title="Remove category \'' + esc(cat.label) + '\'">✕</button>'
+        : '';
+      return '<span class="modal-cat">' +
+        '<span class="dot" style="background:' + cat.color + '"></span>' +
+        '<span class="modal-cat-name">' + esc(cat.label) + '</span>' +
+        badge +
+        removeBtn +
+        '</span>';
     }).join('');
   }
 
+  function openAddCategory() {
+    els.addCatPanel.hidden = false;
+    els.addCatError.hidden = true;
+    els.addCatError.textContent = '';
+    els.newCatName.value = '';
+    els.newCatProductive.checked = false;
+
+    const PALETTE = ['#38bdf8', '#ec4899', '#14b8a6', '#f43f5e', '#8b5cf6', '#f59e0b', '#06b6d4', '#10b981', '#e11d48', '#6366f1'];
+    const usedColors = new Set(state.categories.map(function (c) { return c.color.toLowerCase(); }));
+    const available = PALETTE.find(function (col) { return !usedColors.has(col.toLowerCase()); }) || PALETTE[0];
+    els.newCatColor.value = available;
+    els.newCatName.focus();
+  }
+
+  function closeAddCategory() {
+    els.addCatPanel.hidden = true;
+    els.addCatError.hidden = true;
+    els.addCatError.textContent = '';
+    els.newCatName.value = '';
+  }
+
+  function submitAddCategory() {
+    const rawName = els.newCatName.value.trim();
+    if (!rawName) {
+      els.addCatError.textContent = 'Please enter a category name.';
+      els.addCatError.hidden = false;
+      els.newCatName.focus();
+      return;
+    }
+
+    const slug = rawName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || ('cat_' + Date.now());
+    const lowerName = rawName.toLowerCase();
+
+    const exists = state.categories.some(function (c) {
+      return c.id === slug || c.label.toLowerCase() === lowerName;
+    });
+    if (exists) {
+      els.addCatError.textContent = 'A category with this name already exists.';
+      els.addCatError.hidden = false;
+      els.newCatName.focus();
+      return;
+    }
+
+    const newCat = {
+      id: slug,
+      label: rawName,
+      color: els.newCatColor.value || '#38bdf8',
+      productive: Boolean(els.newCatProductive.checked)
+    };
+
+    const otherIdx = state.categories.findIndex(function (c) { return c.id === 'other'; });
+    if (otherIdx >= 0) {
+      state.categories.splice(otherIdx, 0, newCat);
+    } else {
+      state.categories.push(newCat);
+    }
+    state.categoryById = new Map(state.categories.map(function (c) { return [c.id, c]; }));
+
+    const currentRules = els.rulesText.value.trimEnd();
+    els.rulesText.value = (currentRules ? currentRules + '\n' : '') + rawName + ': ';
+
+    renderModalCategories();
+    closeAddCategory();
+    els.rulesText.focus();
+    els.rulesText.setSelectionRange(els.rulesText.value.length, els.rulesText.value.length);
+  }
+
+  function removeCategory(catId) {
+    if (catId === 'other' || state.categories.length <= 1) return;
+    const cat = state.categories.find(function (c) { return c.id === catId; });
+    if (!cat) return;
+
+    state.categories = state.categories.filter(function (c) { return c.id !== catId; });
+    state.categoryById = new Map(state.categories.map(function (c) { return [c.id, c]; }));
+
+    const catLabelLower = cat.label.toLowerCase();
+    const lines = els.rulesText.value.split(/\r?\n/);
+    const updatedLines = lines.filter(function (line) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return true;
+      const colon = trimmed.indexOf(':');
+      if (colon < 0) return true;
+      const rawCat = trimmed.slice(0, colon).trim().toLowerCase();
+      return rawCat !== catId && rawCat !== catLabelLower;
+    });
+    els.rulesText.value = updatedLines.join('\n');
+
+    renderModalCategories();
+  }
+
   function openRules() {
+    closeAddCategory();
+    renderModalCategories();
     els.rulesText.value = state.rulesText;
     els.rulesErrors.hidden = true;
     els.rulesErrors.textContent = '';
@@ -1256,11 +1140,12 @@
   }
 
   function closeRules() {
+    closeAddCategory();
     els.rulesModal.hidden = true;
   }
 
   function saveRules() {
-    const parsed = A.parseRules(els.rulesText.value);
+    const parsed = A.parseRules(els.rulesText.value, state.categories);
     const errors = parsed.errors.slice();
 
     if (!parsed.rules.length && !errors.length) {
@@ -1275,6 +1160,8 @@
     state.rules = parsed.rules;
     state.rulesText = els.rulesText.value.trim();
     saveText(STORAGE_RULES, state.rulesText);
+    saveCategories();
+    saveOverrides();
     closeRules();
     applyAndRender();
   }
@@ -1341,7 +1228,9 @@
       'siteList', 'sitesAllBtn', 'sitesCsvBtn', 'sitesNote',
       'rhythmTitle', 'rhythmSub', 'rhythmBadge', 'rhythmBody',
       'updatedAt', 'tooltip', 'catPop', 'popName', 'popOptions', 'popAuto',
-      'rulesModal', 'modalCats', 'rulesText', 'rulesErrors',
+      'rulesModal', 'modalCats', 'openAddCatBtn', 'addCatPanel', 'newCatName',
+      'newCatColor', 'newCatProductive', 'submitAddCatBtn', 'cancelAddCatBtn',
+      'addCatError', 'rulesText', 'rulesErrors',
       'resetRulesBtn', 'clearOverridesBtn', 'cancelRulesBtn', 'saveRulesBtn'
     ].forEach(function (id) {
       els[id] = $(id);
@@ -1413,10 +1302,34 @@
     els.cancelRulesBtn.addEventListener('click', closeRules);
     els.saveRulesBtn.addEventListener('click', saveRules);
     els.resetRulesBtn.addEventListener('click', function () {
+      state.categories = A.DEFAULT_CATEGORIES.map(function (c) { return Object.assign({}, c); });
+      state.categoryById = new Map(state.categories.map(function (c) { return [c.id, c]; }));
       els.rulesText.value = A.DEFAULT_RULES_TEXT;
       els.rulesErrors.hidden = true;
+      closeAddCategory();
+      renderModalCategories();
     });
     els.clearOverridesBtn.addEventListener('click', clearOverrides);
+
+    els.openAddCatBtn.addEventListener('click', openAddCategory);
+    els.cancelAddCatBtn.addEventListener('click', closeAddCategory);
+    els.submitAddCatBtn.addEventListener('click', submitAddCategory);
+    els.newCatName.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submitAddCategory();
+      } else if (event.key === 'Escape') {
+        closeAddCategory();
+      }
+    });
+
+    els.modalCats.addEventListener('click', function (event) {
+      const btn = event.target.closest('.modal-cat-remove');
+      if (!btn) return;
+      event.preventDefault();
+      const catId = btn.getAttribute('data-cat-id');
+      removeCategory(catId);
+    });
 
     els.rulesModal.addEventListener('click', function (event) {
       if (event.target === els.rulesModal) closeRules();
@@ -1424,13 +1337,10 @@
 
     document.addEventListener('keydown', function (event) {
       if (event.key !== 'Escape') return;
-      if (!els.rulesModal.hidden) closeRules();
+      if (!els.addCatPanel.hidden) closeAddCategory();
+      else if (!els.rulesModal.hidden) closeRules();
       else hidePopover();
       hideTooltip();
-    });
-
-    window.addEventListener('resize', function () {
-      drawDayTimeline();
     });
 
     window.addEventListener('scroll', hidePopover, true);

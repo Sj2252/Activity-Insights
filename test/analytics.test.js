@@ -228,3 +228,57 @@ test('days are split at local midnight', () => {
   assert.equal(Math.round(result.days[0].total), 3600);
   assert.equal(Math.round(result.days[1].total), 3600);
 });
+
+test('parseRules and computeUsage support custom added and removed categories', () => {
+  const customCategories = [
+    { id: 'design', label: 'Design', color: '#ec4899', productive: true },
+    { id: 'leisure', label: 'Leisure', color: '#f59e0b', productive: false },
+    { id: 'other', label: 'Other', color: '#475569', productive: false }
+  ];
+
+  const parsed = A.parseRules('Design: figma, sketch\nLeisure: netflix\nWork: vs code', customCategories);
+  assert.deepEqual(parsed.rules, [
+    { category: 'design', patterns: ['figma', 'sketch'] },
+    { category: 'leisure', patterns: ['netflix'] }
+  ]);
+  // Work is unknown because it was not included in customCategories
+  assert.equal(parsed.errors.length, 1);
+  assert.match(parsed.errors[0], /unknown category "Work"/);
+
+  const result = usage({
+    categories: customCategories,
+    rules: parsed.rules,
+    afkEvents: [afk('not-afk', 10, 12)],
+    windowEvents: [
+      ev('Figma.exe', 'Design system', 10, 11),
+      ev('brave.exe', 'Netflix', 11, 12)
+    ],
+    webEvents: [
+      web('https://www.netflix.com/watch', 'Movie', 11, 12)
+    ]
+  });
+
+  const catMap = Object.fromEntries(result.categories.map(c => [c.id, Math.round(c.seconds)]));
+  assert.equal(catMap.design, 3600);
+  assert.equal(catMap.leisure, 3600);
+  // Design is productive, so focusSeconds must equal 3600
+  assert.equal(Math.round(result.metrics.focusSeconds), 3600);
+});
+
+test('sanitizeOverrides filters out removed categories', () => {
+  const customCategories = [
+    { id: 'work', label: 'Work', color: '#4f8cff', productive: true },
+    { id: 'other', label: 'Other', color: '#475569', productive: false }
+  ];
+
+  const sanitized = A.sanitizeOverrides({
+    apps: { 'code.exe': 'work', 'steam.exe': 'gaming' },
+    sites: { 'github.com': 'work', 'youtube.com': 'entertainment' }
+  }, customCategories);
+
+  assert.deepEqual(sanitized, {
+    apps: { 'code.exe': 'work' },
+    sites: { 'github.com': 'work' }
+  });
+});
+

@@ -184,7 +184,29 @@
       </p>
     </header>
 
-    <div class="modal-cats" id="modalCats"></div>
+    <div class="modal-cats-section">
+      <div class="modal-cats-head">
+        <span class="modal-section-title">Active categories</span>
+        <button type="button" class="btn btn-small btn-ghost" id="openAddCatBtn">+ Add category</button>
+      </div>
+      <div class="modal-cats" id="modalCats"></div>
+
+      <div id="addCatPanel" class="add-cat-panel" hidden>
+        <div class="add-cat-row">
+          <input type="text" id="newCatName" class="add-cat-input" placeholder="Category name (e.g. Finance, Reading)…" maxlength="28" autocomplete="off">
+          <div class="add-cat-swatches">
+            <input type="color" id="newCatColor" value="#38bdf8" title="Category color">
+          </div>
+          <label class="add-cat-check" title="Time in this category counts towards focus time">
+            <input type="checkbox" id="newCatProductive">
+            <span>Productive</span>
+          </label>
+          <button type="button" class="btn btn-small btn-primary" id="submitAddCatBtn">Add</button>
+          <button type="button" class="btn btn-small btn-ghost" id="cancelAddCatBtn">Cancel</button>
+        </div>
+        <div id="addCatError" class="add-cat-error" hidden></div>
+      </div>
+    </div>
 
     <textarea id="rulesText" spellcheck="false" aria-label="Category rules editor"></textarea>
     <div id="rulesErrors" class="rules-errors" hidden></div>

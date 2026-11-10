@@ -12,7 +12,7 @@
    * Categories
    * ------------------------------------------------------------------ */
 
-  const CATEGORIES = [
+  const DEFAULT_CATEGORIES = [
     { id: 'work',          label: 'Work',                color: '#4f8cff', productive: true  },
     { id: 'learning',      label: 'Learning',            color: '#a78bfa', productive: true  },
     { id: 'communication', label: 'Communication',       color: '#2dd4bf', productive: false },
@@ -24,7 +24,7 @@
     { id: 'other',         label: 'Other',               color: '#475569', productive: false }
   ];
 
-  const CATEGORY_BY_ID = new Map(CATEGORIES.map(function (c) { return [c.id, c]; }));
+  const DEFAULT_CATEGORY_BY_ID = new Map(DEFAULT_CATEGORIES.map(function (c) { return [c.id, c]; }));
 
   /*
    * Rules are checked in order, first match wins.
@@ -346,9 +346,10 @@
    * Rules / overrides
    * ------------------------------------------------------------------ */
 
-  function buildCategoryIndex() {
+  function buildCategoryIndex(categoriesList) {
+    const list = categoriesList && categoriesList.length ? categoriesList : DEFAULT_CATEGORIES;
     const map = new Map();
-    for (const c of CATEGORIES) {
+    for (const c of list) {
       map.set(c.id, c.id);
       map.set(c.label.toLowerCase(), c.id);
     }
@@ -361,8 +362,8 @@
     return map;
   }
 
-  function parseRules(text) {
-    const index = buildCategoryIndex();
+  function parseRules(text, categoriesList) {
+    const index = buildCategoryIndex(categoriesList);
     const rules = [];
     const errors = [];
 
@@ -394,8 +395,9 @@
     return { rules: rules, errors: errors };
   }
 
-  function rulesToText(rules) {
-    const labelOf = new Map(CATEGORIES.map(function (c) { return [c.id, c.label]; }));
+  function rulesToText(rules, categoriesList) {
+    const list = categoriesList && categoriesList.length ? categoriesList : DEFAULT_CATEGORIES;
+    const labelOf = new Map(list.map(function (c) { return [c.id, c.label]; }));
     return (rules || []).map(function (rule) {
       return (labelOf.get(rule.category) || rule.category) + ': ' + rule.patterns.join(', ');
     }).join('\n');
@@ -415,7 +417,7 @@
     return haystack.indexOf(pattern) !== -1;
   }
 
-  function pickCategory(event, rules, overrides) {
+  function pickCategory(event, rules, overrides, fallbackCategory, categoriesList) {
     const app = String(event.app || '');
     const appKey = app.toLowerCase();
     const title = String(event.title || '');
@@ -435,11 +437,16 @@
         if (patternMatches(pattern, haystack, domain, appKey)) return rule.category;
       }
     }
-    return isBrowser(app) ? 'browsing' : 'other';
+    const fallback = fallbackCategory || 'other';
+    const hasBrowsing = categoriesList
+      ? categoriesList.some(function (c) { return c.id === 'browsing'; })
+      : true;
+    return isBrowser(app) ? (hasBrowsing ? 'browsing' : fallback) : fallback;
   }
 
-  function sanitizeOverrides(raw) {
-    const valid = new Set(CATEGORIES.map(function (c) { return c.id; }));
+  function sanitizeOverrides(raw, categoriesList) {
+    const list = categoriesList && categoriesList.length ? categoriesList : DEFAULT_CATEGORIES;
+    const valid = new Set(list.map(function (c) { return c.id; }));
     const out = { apps: {}, sites: {} };
     if (!raw || typeof raw !== 'object') return out;
     for (const scope of ['apps', 'sites']) {
@@ -460,16 +467,21 @@
     const opts = input || {};
     const rangeStart = opts.rangeStart;
     const rangeEnd = opts.rangeEnd;
+    const categoriesList = opts.categories && opts.categories.length ? opts.categories : DEFAULT_CATEGORIES;
     if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd <= rangeStart) {
-      return emptyUsage(rangeStart, rangeEnd);
+      return emptyUsage(rangeStart, rangeEnd, categoriesList);
     }
 
     const rules = opts.rules && opts.rules.length ? opts.rules : DEFAULT_RULES;
-    const overrides = sanitizeOverrides(opts.overrides);
+    const overrides = sanitizeOverrides(opts.overrides, categoriesList);
 
     const activeIntervals = buildActiveIntervals(opts.afkEvents, rangeStart, rangeEnd);
     const windowEvents = normalizeWindowEvents(opts.windowEvents, rangeStart, rangeEnd);
     const webEvents = normalizeWebEvents(opts.webEvents, rangeStart, rangeEnd);
+
+    const fallbackCatId = categoriesList.some(function (c) { return c.id === 'other'; })
+      ? 'other'
+      : (categoriesList[0] ? categoriesList[0].id : 'other');
 
     /* --- window segments ------------------------------------------- */
     const segments = [];
@@ -481,7 +493,7 @@
       const web = browser ? findWebForWindow(webEvents, ev) : null;
       const domain = web ? web.domain : null;
       const title = ev.title || (web ? web.title : '');
-      const category = pickCategory({ app: ev.app, title: title, domain: domain }, rules, overrides);
+      const category = pickCategory({ app: ev.app, title: title, domain: domain }, rules, overrides, fallbackCatId, categoriesList);
 
       for (const piece of pieces) {
         segments.push({
@@ -501,7 +513,7 @@
     }), 0));
 
     /* --- per-category, per-app, per-day ---------------------------- */
-    const categories = CATEGORIES.map(function (c) {
+    const categories = categoriesList.map(function (c) {
       return Object.assign({}, c, { seconds: 0, share: 0 });
     });
     const categoryById = new Map(categories.map(function (c) { return [c.id, c]; }));
@@ -532,8 +544,8 @@
       app.seconds += seconds;
       app.cats[seg.category] = (app.cats[seg.category] || 0) + seconds;
 
-      const cat = categoryById.get(seg.category) || categoryById.get('other');
-      cat.seconds += seconds;
+      const cat = categoryById.get(seg.category) || categoryById.get(fallbackCatId) || categories[0];
+      if (cat) cat.seconds += seconds;
 
       splitByHour(seg.start, seg.end, function (s, e, key, hour) {
         const part = (e - s) / 1000;
@@ -560,7 +572,7 @@
     }
 
     const appList = Array.from(appMap.values()).map(function (app) {
-      const top = topCategory(app.cats);
+      const top = topCategory(app.cats, fallbackCatId);
       return {
         key: app.key,
         app: app.app,
@@ -587,7 +599,7 @@
       const seconds = sumIntervals(pieces);
       if (seconds <= 0) continue;
 
-      const category = pickCategory({ app: '', title: web.title, domain: web.domain }, rules, overrides);
+      const category = pickCategory({ app: '', title: web.title, domain: web.domain }, rules, overrides, fallbackCatId, categoriesList);
       let site = siteMap.get(web.domain);
       if (!site) {
         site = {
@@ -609,7 +621,7 @@
         key: site.key,
         domain: site.domain,
         seconds: site.seconds,
-        category: topCategory(site.cats),
+        category: topCategory(site.cats, fallbackCatId),
         cats: site.cats,
         title: site.title
       };
@@ -695,8 +707,8 @@
     };
   }
 
-  function topCategory(cats) {
-    let best = 'other';
+  function topCategory(cats, fallback) {
+    let best = fallback || 'other';
     let bestSeconds = -1;
     for (const id of Object.keys(cats || {})) {
       if (cats[id] > bestSeconds) {
@@ -707,12 +719,13 @@
     return best;
   }
 
-  function emptyUsage(rangeStart, rangeEnd) {
+  function emptyUsage(rangeStart, rangeEnd, categoriesList) {
+    const list = categoriesList && categoriesList.length ? categoriesList : DEFAULT_CATEGORIES;
     return {
       rangeStart: rangeStart,
       rangeEnd: rangeEnd,
       totalActive: 0,
-      categories: CATEGORIES.map(function (c) {
+      categories: list.map(function (c) {
         return Object.assign({}, c, { seconds: 0, share: 0 });
       }),
       appList: [],
@@ -728,10 +741,11 @@
   }
 
   return {
-    CATEGORIES: CATEGORIES,
-    CATEGORY_BY_ID: CATEGORY_BY_ID,
+    CATEGORIES: DEFAULT_CATEGORIES,
+    DEFAULT_CATEGORIES: DEFAULT_CATEGORIES,
+    CATEGORY_BY_ID: DEFAULT_CATEGORY_BY_ID,
     DEFAULT_RULES: DEFAULT_RULES,
-    DEFAULT_RULES_TEXT: rulesToText(DEFAULT_RULES),
+    DEFAULT_RULES_TEXT: rulesToText(DEFAULT_RULES, DEFAULT_CATEGORIES),
     isBrowser: isBrowser,
     parseRules: parseRules,
     rulesToText: rulesToText,
