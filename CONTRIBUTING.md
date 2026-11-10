@@ -20,10 +20,10 @@ Thank you for considering a contribution! This is a small, focused project — p
 ## Development setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/aw-insights.git
-cd aw-insights
+git clone https://github.com/Sj2252/Activity-Insights.git
+cd Activity-Insights
 node server.js        # start the dev server
-npm test              # run the 13 unit tests
+npm test              # run the 15 unit tests
 ```
 
 No install step needed — there are no dependencies to install.
@@ -34,7 +34,7 @@ No install step needed — there are no dependencies to install.
 npm test
 ```
 
-The test suite uses the Node.js built-in test runner (`node:test`). All 13 tests cover the analytics engine (`public/analytics.js`): AFK clipping, website attribution, category rules, overrides, and day splitting. If you change `analytics.js`, make sure the existing tests still pass and add new ones for new behaviour.
+The test suite uses the Node.js built-in test runner (`node:test`). All 15 tests cover the analytics engine (`public/analytics.js`): AFK clipping, website attribution, category rules, custom categories, overrides, and day splitting. If you change `analytics.js`, make sure the existing tests still pass and add new ones for new behaviour.
 
 ## Code style
 

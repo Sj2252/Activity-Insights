@@ -174,7 +174,7 @@ aw-insights/
 │   ├── analytics.js       pure time/category engine (also unit-tested)
 │   └── app.js             UI, charts, rules, overrides, CSV export
 └── test/
-    └── analytics.test.js  13 unit tests (Node built-in test runner)
+    └── analytics.test.js  15 unit tests (Node built-in test runner)
 ```
 
 ---
