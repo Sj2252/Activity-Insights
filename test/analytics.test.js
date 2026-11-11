@@ -282,3 +282,66 @@ test('sanitizeOverrides filters out removed categories', () => {
   });
 });
 
+test('slices single browser window event across multiple visited web domains', () => {
+  // A single continuous 3-hour browser window session
+  // where the user spent 2 hours on Coursera (learning) and 1 hour on YouTube (entertainment)
+  const result = usage({
+    afkEvents: [afk('not-afk', 10, 13)],
+    windowEvents: [
+      ev('brave.exe', 'Brave Browser', 10, 13)
+    ],
+    webEvents: [
+      web('https://www.coursera.org/learn/algorithms', 'Algorithms - Coursera', 10, 12),
+      web('https://www.youtube.com/watch?v=fun', 'Video - YouTube', 12, 13)
+    ]
+  });
+
+  const catMap = Object.fromEntries(result.categories.map(c => [c.id, Math.round(c.seconds)]));
+  // Categories must reflect 2 hours learning, 1 hour entertainment
+  assert.equal(catMap.learning, 7200);
+  assert.equal(catMap.entertainment, 3600);
+
+  // Top applications must reflect Brave with dominant category learning
+  const brave = result.appList.find(a => a.app === 'brave.exe');
+  assert.equal(brave.category, 'learning');
+  assert.equal(Math.round(brave.cats.learning), 7200);
+  assert.equal(Math.round(brave.cats.entertainment), 3600);
+
+  // Top websites must match
+  assert.equal(result.siteList[0].domain, 'coursera.org');
+  assert.equal(result.siteList[0].category, 'learning');
+  assert.equal(Math.round(result.siteList[0].seconds), 7200);
+  assert.equal(result.siteList[1].domain, 'youtube.com');
+  assert.equal(result.siteList[1].category, 'entertainment');
+  assert.equal(Math.round(result.siteList[1].seconds), 3600);
+
+  // Hourly rhythm must attribute learning to hours 10 and 11, entertainment to hour 12
+  const day = result.days[0];
+  assert.equal(Math.round(day.hourly[10].cats.learning), 3600);
+  assert.equal(Math.round(day.hourly[11].cats.learning), 3600);
+  assert.equal(Math.round(day.hourly[12].cats.entertainment), 3600);
+});
+
+test('browser app-level override does not suppress website domain classification rules', () => {
+  // Even if brave.exe has an app override to entertainment, visiting coursera.org
+  // should still classify as learning under site rules.
+  const result = usage({
+    afkEvents: [afk('not-afk', 10, 11)],
+    windowEvents: [
+      ev('brave.exe', 'Coursera', 10, 11)
+    ],
+    webEvents: [
+      web('https://www.coursera.org/', 'Coursera', 10, 11)
+    ],
+    overrides: {
+      apps: { 'brave.exe': 'entertainment' }
+    }
+  });
+
+  const catMap = Object.fromEntries(result.categories.map(c => [c.id, Math.round(c.seconds)]));
+  assert.equal(catMap.learning, 3600);
+  assert.equal(catMap.entertainment || 0, 0);
+  assert.equal(result.appList[0].category, 'learning');
+});
+
+

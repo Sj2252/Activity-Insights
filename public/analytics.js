@@ -311,26 +311,16 @@
   }
 
   function findWebForWindow(webEvents, windowEvent) {
-    if (!webEvents.length) return null;
+    if (!webEvents || !webEvents.length) return null;
     const pad = 5000;
-    let lo = 0, hi = webEvents.length - 1, index = webEvents.length;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (webEvents[mid].start >= windowEvent.start - pad) {
-        index = mid;
-        hi = mid - 1;
-      } else {
-        lo = mid + 1;
-      }
-    }
-
     let best = null;
     let bestOverlap = -1;
     let bestDistance = Infinity;
 
-    for (let i = index; i < webEvents.length; i++) {
+    for (let i = 0; i < webEvents.length; i++) {
       const w = webEvents[i];
       if (w.start > windowEvent.end + pad) break;
+      if (w.end < windowEvent.start - pad) continue;
       const overlap = Math.min(windowEvent.end, w.end) - Math.max(windowEvent.start, w.start);
       const distance = Math.abs(w.start - windowEvent.start);
       if (overlap > bestOverlap || (overlap === bestOverlap && distance < bestDistance)) {
@@ -422,11 +412,14 @@
     const appKey = app.toLowerCase();
     const title = String(event.title || '');
     const domain = event.domain || null;
+    const browser = isBrowser(app);
 
+    // Site overrides take highest priority whenever a domain is known
     if (domain && overrides && overrides.sites && overrides.sites[domain]) {
       return overrides.sites[domain];
     }
-    if (appKey && overrides && overrides.apps && overrides.apps[appKey]) {
+    // For non-browser apps, manual app overrides take priority over rules
+    if (!browser && appKey && overrides && overrides.apps && overrides.apps[appKey]) {
       return overrides.apps[appKey];
     }
 
@@ -437,11 +430,17 @@
         if (patternMatches(pattern, haystack, domain, appKey)) return rule.category;
       }
     }
+
+    // For browsers, manual app override acts as a fallback for untracked/unclassified pages
+    if (browser && appKey && overrides && overrides.apps && overrides.apps[appKey]) {
+      return overrides.apps[appKey];
+    }
+
     const fallback = fallbackCategory || 'other';
     const hasBrowsing = categoriesList
       ? categoriesList.some(function (c) { return c.id === 'browsing'; })
       : true;
-    return isBrowser(app) ? (hasBrowsing ? 'browsing' : fallback) : fallback;
+    return browser ? (hasBrowsing ? 'browsing' : fallback) : fallback;
   }
 
   function sanitizeOverrides(raw, categoriesList) {
@@ -490,20 +489,96 @@
       if (!pieces.length) continue;
 
       const browser = isBrowser(ev.app);
-      const web = browser ? findWebForWindow(webEvents, ev) : null;
-      const domain = web ? web.domain : null;
-      const title = ev.title || (web ? web.title : '');
-      const category = pickCategory({ app: ev.app, title: title, domain: domain }, rules, overrides, fallbackCatId, categoriesList);
 
+      if (!browser || !webEvents.length) {
+        const category = pickCategory({ app: ev.app, title: ev.title, domain: null }, rules, overrides, fallbackCatId, categoriesList);
+        for (const piece of pieces) {
+          segments.push({
+            start: piece[0],
+            end: piece[1],
+            app: ev.app,
+            title: ev.title,
+            domain: null,
+            category: category
+          });
+        }
+        continue;
+      }
+
+      // For browser windows with web events, slice each active piece by visited web events
       for (const piece of pieces) {
-        segments.push({
-          start: piece[0],
-          end: piece[1],
-          app: ev.app,
-          title: title,
-          domain: domain,
-          category: category
-        });
+        const pStart = piece[0];
+        const pEnd = piece[1];
+        if (pEnd <= pStart) continue;
+
+        const overlapping = [];
+        for (let i = 0; i < webEvents.length; i++) {
+          const w = webEvents[i];
+          if (w.start >= pEnd) break;
+          if (w.end > pStart) {
+            overlapping.push(w);
+          }
+        }
+
+        if (!overlapping.length) {
+          const category = pickCategory({ app: ev.app, title: ev.title, domain: null }, rules, overrides, fallbackCatId, categoriesList);
+          segments.push({
+            start: pStart,
+            end: pEnd,
+            app: ev.app,
+            title: ev.title,
+            domain: null,
+            category: category
+          });
+          continue;
+        }
+
+        const boundaries = new Set();
+        boundaries.add(pStart);
+        boundaries.add(pEnd);
+        for (let i = 0; i < overlapping.length; i++) {
+          const w = overlapping[i];
+          const s = Math.max(pStart, Math.min(pEnd, w.start));
+          const e = Math.max(pStart, Math.min(pEnd, w.end));
+          if (s > pStart && s < pEnd) boundaries.add(s);
+          if (e > pStart && e < pEnd) boundaries.add(e);
+        }
+        const sortedBounds = Array.from(boundaries).sort(function (a, b) { return a - b; });
+
+        for (let i = 0; i < sortedBounds.length - 1; i++) {
+          const s = sortedBounds[i];
+          const e = sortedBounds[i + 1];
+          if (e <= s) continue;
+          const mid = (s + e) / 2;
+
+          let bestWeb = null;
+          for (let j = 0; j < overlapping.length; j++) {
+            const w = overlapping[j];
+            if (w.start <= mid && w.end >= mid) {
+              if (!bestWeb || w.start > bestWeb.start || (w.start === bestWeb.start && w.end > bestWeb.end)) {
+                bestWeb = w;
+              }
+            }
+          }
+
+          const domain = bestWeb ? bestWeb.domain : null;
+          const title = (bestWeb && bestWeb.title) ? bestWeb.title : ev.title;
+          const category = pickCategory({ app: ev.app, title: title, domain: domain }, rules, overrides, fallbackCatId, categoriesList);
+
+          const last = segments[segments.length - 1];
+          if (last && last.end === s && last.app === ev.app && last.category === category && last.domain === domain && last.title === title) {
+            last.end = e;
+          } else {
+            segments.push({
+              start: s,
+              end: e,
+              app: ev.app,
+              title: title,
+              domain: domain,
+              category: category
+            });
+          }
+        }
       }
     }
     segments.sort(function (a, b) { return a.start - b.start || a.end - b.end; });
